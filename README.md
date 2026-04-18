@@ -1,3 +1,4 @@
+“逻辑全抽离，UI 抽象化，存储契约化”。
 
 ```
 The user wants to migrate to a Monorepo-style architecture, but the guidance explicitly notes that in Lovable projects, we must keep everything inside src/ to avoid breaking the Vite + Supabase type-gen toolchain. So this is a "Modular Monolith" — logical monorepo structure mirrored inside src/.
