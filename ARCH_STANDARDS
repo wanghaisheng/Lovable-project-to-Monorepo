@@ -1,3 +1,135 @@
+“逻辑全抽离，UI 抽象化，存储契约化”。
+
+在这种架构下，**Web、PWA、React Native 以及 Edge Worker 共享同一个“大脑” (Action Layer)**，改变的仅仅是“神经传导方式”（tRPC、HTTP 或直接本地调用）和“记忆介质”（D1、Supabase 或 SQLite）。
+
+以下是为你最终定稿的 2 份技术架构规范文档：
+
+---
+
+### 文档 1：技术架构与多端解耦规范 (ARCH_STANDARDS.md)
+
+```markdown
+# 技术架构与多端解耦规范 (Unified Core Architecture Standards)
+
+## 1. 核心哲学：一套逻辑，多端注入
+架构的核心在于将业务逻辑抽象为 **"Procedures (动作过程)"**，通过不同的传输层和存储适配器实现跨平台运行。
+
+### 1.1 三位一体架构层
+1.  **表现层 (UI Layer)**:
+    *   **Web**: Astro + React (HTML/Tailwind)。
+    *   **Mobile**: React Native (Native Components/StyleSheet)。
+    *   **要求**: 仅作为“状态机”展示数据，通过统一的客户端代理发起请求。
+2.  **动作层 (Action Layer / Unified API)**:
+    *   **职责**: 核心业务逻辑、校验、计算。
+    *   **传输策略**: 
+        *   **tRPC 模式**: Web 端通过 HTTP 远程调用 Server 端的逻辑。
+        *   **Local 模式**: RN 端或离线 PWA 直接在本地注入并执行相同的逻辑。
+3.  **持久层 (Storage Adapters)**:
+    *   **职责**: 契约化存储。
+    *   **实现**: `SupabaseAdapter` (Cloud), `D1Adapter` (Edge), `SqliteAdapter` (Mobile/Local)。
+
+## 2. 存储契约化原则 (Storage Contract)
+*   **严禁直连**: 业务逻辑严禁 `import` 任何特定数据库 SDK（如 `@supabase/supabase-js`）。
+*   **依赖注入**: 存储实现通过配置注入动作层。切换数据库只需更换实现类，逻辑层代码 0 改动。
+
+## 3. 渲染策略：流量驱动型 SSG (Analytics-Driven)
+*   **流量回溯**: 构建时查询 Cloudflare Analytics，对前 10% 高频路径进行 SSG。
+*   **动态 SSR**: 剩余长尾页面通过 Edge Worker 执行 API Action 渲染。
+*   **跨端复用**: 相同的渲染逻辑可在 RN 端用于生成离线页面视图。
+
+## 4. 零硬编码准则 (Zero Hardcoding)
+*   **配置中心化**: 所有的 API 端点、密钥标识、功能开关由 `ConfigService` 统一管理。
+*   **UI 抽象化**: 使用 Design Tokens (JSON) 驱动样式。Web 端映射至 Tailwind，RN 端映射至原生样式系统。
+*   **逻辑纯净化**: 动作层禁止引用 `window`, `document`, `navigator` 等浏览器专有全局对象。
+
+---
+
+## 5. 多端复用检查清单
+- [ ] 核心 Action 是否能同时在 Node.js 和移动端 JS 引擎中运行？
+- [ ] 存储操作是否完全被 `IStorageAdapter` 接口屏蔽？
+- [ ] 所有的样式定义是否基于 Token，而非硬编码的 CSS/像素？
+```
+
+---
+
+### 文档 2：类型安全与跨端契约指南 (TYPE_SAFETY.md)
+
+```markdown
+# 类型安全与跨端契约指南 (Type Safety & Unified Contract)
+
+## 1. 契约驱动：Zod & tRPC
+系统以 **Schema** 为核心，而非代码实现。
+
+*   **单一真相源**: 在 `packages/shared` 中定义所有业务实体的 Zod Schema。
+*   **端到端同步**: 
+    *   Web 端通过 tRPC 实现“修改后即编译报错”的强类型同步。
+    *   RN 端通过导入相同的 Action 类型实现本地逻辑的类型约束。
+
+## 2. 结果对象模式 (Unified Result Pattern)
+为了统一处理网络异常（Web）和原生存储异常（RN），所有 Procedure 必须返回：
+```typescript
+type Result<T, E = AppError> = 
+  | { ok: true; data: T; source: 'server' | 'cache' | 'local' } 
+  | { ok: false; error: E };
+```
+*   `source` 字段允许 UI 根据数据来源（如本地缓存或实时服务器）展示不同的 UI 提示（如“离线模式”标签）。
+
+## 3. 存储层类型契约 (Adapter Types)
+```typescript
+interface IStorageAdapter {
+  /** 泛型约束确保返回的数据库记录自动转换为领域模型 */
+  query<T>(collection: string, params: QueryParams): Promise<Result<T[]>>;
+  
+  /** 统一身份认证接口，适配 Web Cookies 和 RN SecureStore */
+  auth: {
+    getSession(): Promise<Result<Session | null>>;
+  };
+}
+```
+
+## 4. 跨平台样式安全 (Design Token Typing)
+```typescript
+/** 设计令牌类型化，确保样式在 Web 与 RN 之间的一致性 */
+type DesignToken = {
+  colors: Record<ColorName, string>;
+  spacing: Record<SizeName, number>;
+};
+
+// 禁止使用 string，必须使用 Token 定义的 key
+```
+
+## 5. 类型安全检查清单
+- [ ] 所有的 API 调用是否具备端到端类型回溯？
+- [ ] 所有的 Result 对象是否强制进行了 `ok` 状态检查？
+- [ ] 实体定义 (Entities) 是否使用了平台无关的时间戳 (number) 和标识符 (string)？
+- [ ] 是否在 Action 层之外出现了厂商特定的类型定义？（应被 Adapter 屏蔽）
+
+---
+
+## 6. 质量红线
+*   **禁止 any**: 外部数据入口必须进行校验或断言。
+*   **禁止平台污染**: 在 `packages/core` 中出现 Web API 类型视为构建失败。
+```
+
+---
+
+### 💡 为什么这套方案能兼顾“一套底层，多端应用”？
+
+1.  **代码复用率最高化**：
+    你的业务逻辑（Action 层）和校验逻辑（Zod）在 `packages/core` 中。Web、RN、Edge 只需分别实现 UI 和特定的适配器，复用率可达 80% 以上。
+
+2.  **极速迁移能力**：
+    当你从 PWA 转向 React Native 时，你不需要重新写 API 调用逻辑。你只需要把 tRPC 的客户端调用换成 Local 调用，或者让 RN 也通过 tRPC 访问 Worker。
+
+3.  **存储灵活性**：
+    初期你可能用 Supabase 做 Web，后期 RN 版本为了离线体验可能需要 SQLite。有了 **Storage Adapter 契约**，你只需增加一个适配器实现，而不用动任何业务代码。
+
+4.  **Edge 渲染优势**：
+    Astro 在 Cloudflare 边缘节点运行动作层，速度极快；而 RN 在本地运行动作层，响应零延迟。
+
+**接下来，我们是否可以开始定义具体的 `IStorageAdapter` 接口和第一个 `Action` 的 Schema？**
+
+
 # 技术架构与零硬编码规范 (Architecture & Decoupling Standards)
 
 ## 1. 核心分层架构：动作契约化
